@@ -13,29 +13,101 @@ import re
 import pyparsing
 
 
+def fix_single_quotes(json_str):
+    """
+    fix_single_quotes will replace JSON-type strings containing double quotes with single quotes to make the entire
+    string valid JSON.
+
+    Example:
+    Given the string
+        "task_template": {"backup_cache_content": "{"cached_enabled":false}"}
+    the double quotes inside "{...}" will be replaced with single quotes resulting in
+        "task_template": {"backup_cache_content": "{'cached_enabled':false}"}
+
+    :param json_str: json_str
+    :return cleaned: string
+    """
+    if not json_str:
+        return json_str
+
+    re_left = re.compile(r'"\{')
+    re_right = re.compile(r'}"')
+    left = re.split(re_left, json_str)
+    if not left:
+        return json_str
+
+    cleaned = ""
+    for index, val in enumerate(left):
+        if index == 0:
+            # The first value is valid JSON.
+            cleaned = val
+            continue
+
+        # The right should split into only 2 pieces
+        right = re.split(re_right, val)
+        if len(right) != 2:
+            print("Could not fix JSON with single quotes")
+            print(f"JSON string: {json_str}")
+            print(f"left: {left}")
+            print(f"right: {right}")
+            return json_str
+
+        # The first piece is invalid and needs double quotes replaced with single quotes.
+        # The second piece is valid JSON
+        cleaned += '"{' + right[0].replace('"', "'") + '}"' + right[1]
+
+    return cleaned
+
+
+def fix_simple(json_str):
+    """
+    fix_simple will perform simple replacements to fix invalid JSON strings.
+
+    Example:
+    Given the string
+        "snapshot_info": {"data_length": 18739, }, "subaction": "update_device_spec"
+    the ", }" will be replaced with "}" resulting in
+        "snapshot_info": {"data_length": 18739}, "subaction": "update_device_spec"
+
+    Given the string
+        "volume_name": "\\?\Volume{25e1747e-5ff0-453f-b39e-a9a2b974addb}\"},
+    the backslashes are escaped with a backslash resulting in
+        "volume_name": "\\\\?\\Volume{25e1747e-5ff0-453f-b39e-a9a2b974addb}\\"},
+
+    :param json_str: json_str
+    :return cleaned: string
+    """
+    if not json_str:
+        return json_str
+    return json_str.replace(', }', '}').replace('\\', '\\\\')
+
+
 class SynologyActiveBackupLogs(object):
-    def __init__(self, after=datetime.timedelta(days=365)):
-        # Log pattern
-        # self.__log_filename_glob = "log.txt*"
-        self.__log_filename_glob = "log-testing.txt*"
+    """
+    SynologyActiveBackupLogs will consume Synology Active Backup logs, parse them and make them available for searching.
+    """
+
+    def __init__(self, after=datetime.timedelta(days=365), log_path=None, filename_glob=None):
+        """
+        Initialize class parameters.
+
+        :param after: datetime.timedelta of how far back to search.
+        """
+        # Filename glob for logs
+        self.__log_filename_glob = "log.txt*"
+        if filename_glob:
+            self.__log_filename_glob = filename_glob
+
+        # Path to log files
+        self.__log_path = "logs"
+        if log_path:
+            self.__log_path = log_path
 
         # __re_timestamp is a regular expression to extract the timestamp from the beginning of the logs.
         self.__re_timestamp = re.compile(r'^(?P<month>\w{3}) (?P<day>\d+) (?P<time>[\d:]{8})')
 
         # __re_everything is a regular expression to match the rest of the log message
         self.__re_everything = re.compile(r'.*')
-
-        # __re_json is a regular expression to match the JSON payload in the message, surrounded by words before and
-        # after the JSON payload
-        self.__re_json = re.compile(r'(?P<prefix>[^{]*)(?P<json>{.*})(?P<suffix>.*)')
-
-        # __re_escape_check is a regular expression to check if a message contains something that looks like JSON.
-        self.__re_escape_check = re.compile(r'{.*}')
-        # __re_escape_start is a regular expression to check for the start of an unescaped string.
-        # self.__re_escape_start = re.compile(r'"{$')
-        self.__re_escape_start = re.compile(r'("{$|"{")')
-        # __re_escape_end is a regular expression to check for the end of an unescaped string.
-        self.__re_escape_end = re.compile(r'}$')
 
         # __now is a timestamp used to determine if the log entry is after "now". 1 minute are added for
         # processing time.
@@ -96,11 +168,6 @@ class SynologyActiveBackupLogs(object):
         # Pattern to parse a log entry
         self.__pattern = timestamp + priority + method_name + method_num + message
 
-        # Build a pattern to parse a message entry with JSON.
-        # self.__json_pattern = action + json_str
-        self.__json_pattern = pyparsing.Regex(self.__re_json, flags=re.DOTALL)
-
-    #
     def parse(self, log=None, log_ts=None):
         """
         Parse will parse the log entry into its component parts.
@@ -128,35 +195,47 @@ class SynologyActiveBackupLogs(object):
             "json": None,
         }
 
-        # If the message has what looks like JSON, extract it from the payload.
-        if re.search(self.__re_escape_check, payload["message"]):
-            try:
-                parsed_json = self.__json_pattern.parseString(payload["message"])
-                if json not in parsed_json:
-                    # print("Payload did not contain any JSON:")
-                    # print(payload["message"])
-                    # print(parsed_json)
-                    return payload
+        # Ignore strings that look like JSON but aren't. This is to prevent false JSON parsing errors.
+        re_ignore_list = [
+            re.compile(r'getVolumeDetailInfo for .*Volume'),
+            re.compile(r'Snapshot: \{'),
+            re.compile(r'Create snapshot for'),
+            # re.compile(r'"volume_name".*Volume\{'),
+            # re.compile(r'Volume\{[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}}'),
+        ]
+        for regex in re_ignore_list:
+            matches = re.search(regex, payload["message"])
+            if matches:
+                # print(f"Ignoring fake JSON: {payload['message']}")
+                # print(f"matches: {matches}")
+                # Fake JSON found. Don't continue the search.
+                return payload
 
-                payload["json_str"] = parsed_json["json"].strip("'\n")
-                # print("Parsing JSON:", payload["json_str"])
+        # If the message has what looks like JSON, extract it from the payload.
+        re_list = [
+            re.compile(r"'(?P<json>{.*})'"),
+            re.compile(r'([^{]*)(?P<json>\{".*})(.*)'),
+        ]
+        for regex in re_list:
+            matches = re.search(regex, payload["message"])
+            if matches:
+                # Fix single quotes
+                # Fix commas without values
+                payload["json_str"] = fix_simple(fix_single_quotes(matches["json"]))
                 try:
                     payload["json"] = json.loads(payload["json_str"], strict=False)
                     # print("JSON Object:", payload["json"])
+                    # Valid JSON found. Don't need to look for more.
+                    return payload
                 except json.decoder.JSONDecodeError as err:
                     print("ERR: Failed to parse JSON from message")
-                    print("Input JSON string")
+                    print("Input JSON string:")
                     print(payload["json_str"])
-                    print("Input log string")
+                    print("Input log string:")
                     print(payload["message"])
+                    print(log)
+                    print(err)
                     print("-----")
-                    return payload
-
-            except pyparsing.ParseException as err:
-                print("ERR: Failed to parse log entry")
-                print(log)
-                print(err.explain(err, depth=5))
-                return payload
 
         return payload
 
@@ -172,12 +251,12 @@ class SynologyActiveBackupLogs(object):
         #   Note that EF BB BF is a UTF-8-encoded BOM. It is not required for UTF-8, but serves only as a
         #   signature (usually on Windows).
         with open(log_path, mode="r", encoding="utf-8-sig") as fh:
-            escape = False
             for line in fh.readlines():
                 ts_match = self.__re_timestamp.match(line)
                 if ts_match:
                     # New log entry
                     # Check if the timestamp is before the threshold
+                    # FIXME: Use f-strings
                     ts = datetime.datetime.strptime("{year} {month} {day} {time}".format(
                         month=ts_match.group("month"),
                         day=ts_match.group("day"),
@@ -191,65 +270,61 @@ class SynologyActiveBackupLogs(object):
 
                     if self.__now - self.__after < ts:
                         # Log timestamp is after the "after" timestamp. Include it.
-                        if re.search(self.__re_escape_start, line.strip()):
-                            escape = True
-
-                        # The current line might need to be escaped.
-                        if escape:
-                            # self.__lines.append(line.strip())
-                            # self.__lines.append(line.strip().replace('"', '\\"'))
-                            self.__lines.append(line.strip().replace('"{"', '"{\\"'))
-                        else:
-                            self.__lines.append(line.strip())
-
                         # Always include the timestamp
+                        self.__lines.append(line.strip())
                         self.__lines_ts.append(ts)
 
                 else:
                     # Multiline log entry; append to last line
-                    # Log timestamp was before the "after" window and nothing is captured yet.
                     if len(self.__lines) == 0:
+                        # Log timestamp was before the "after" window and nothing is captured yet.
                         continue
+                    self.__lines[len(self.__lines) - 1] += line.strip()
 
-                    # JSON cannot have control characters and instead of escaping newlines and such, stripe all
-                    # whitespace.
-                    if re.search(self.__re_escape_end, line.strip()):
-                        escape = False
+    def load(self):
+        """
+        Load will load all the log files in the path.
 
-                    # Escape double quotes and strip whitespace (newlines) that cause problems parsing the JSON.
-                    if escape:
-                        self.__lines[len(self.__lines) - 1] += line.strip().replace('"', '\\"')
-                    else:
-                        self.__lines[len(self.__lines) - 1] += line.strip()
-
-    # load will load all the log files in the path.
-    def load(self, path=None):
-        if not os.path.isdir(path):
-            print("Error: Log directory does not exist: {dir}".format(dir=path))
+        :return: None
+        """
+        if not os.path.isdir(self.__log_path):
+            print(f"Error: Log directory does not exist: {self.__log_path}")
             return None
 
-        files = glob.glob(os.path.join(path, self.__log_filename_glob))
+        files = glob.glob(os.path.join(self.__log_path, self.__log_filename_glob))
         files.sort(key=os.path.getmtime)
         for file in files:
             if datetime.datetime.fromtimestamp(os.path.getmtime(file)) > datetime.datetime.now() - self.__after:
-                print("Processing log file:", file)
+                print(f"Processing log file: {file}")
                 self.load_log_file(file)
 
         return None
 
-    # search will iterate over the log entries searching for lines "after" the window that match the values in find.
-    # find is required.
-    # Depth is limited by the code. ObjectPath can query objects and nested structures.
-    # See https://stackoverflow.com/a/41496646
     def search(self, find):
+        """
+        search will iterate over the log entries searching for lines "after" the window that match the values in find.
+        find is required.
+        Depth is limited by the code. ObjectPath can query objects and nested structures.
+        See https://stackoverflow.com/a/41496646
+
+        :param find: dict representing the log entries to find.
+        :return: dict of the log entries.
+        """
         for x in range(len(self.__lines)):
             fields = self.parse(log=self.__lines[x], log_ts=self.__lines_ts[x])
             if fields and self.is_subset(find, fields):
                 self.__events.append(fields)
         return self.__events
 
-    # is_subset will recursively compare two dictionaries and return true if subset is a subset of the superset.
     def is_subset(self, subset, superset):
+        """
+        is_subset will recursively compare two dictionaries and return true if subset is a subset of the superset.
+        See https://stackoverflow.com/a/57675231
+
+        :param subset: dict of the subset
+        :param superset: dict of the superset
+        :return: true if subset is a subset of the superset
+        """
         if subset is None or superset is None:
             return False
 
