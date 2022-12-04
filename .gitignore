@@ -1,6 +1,7 @@
 # Sample log files
 logs/
 log.zip
+*.json
 
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
