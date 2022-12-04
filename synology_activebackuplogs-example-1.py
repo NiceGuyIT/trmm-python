@@ -12,22 +12,6 @@ def main():
         print("Usage:\n  $ python3 synology_activebackuplogs.py logs/")
         exit(1)
 
-    find = {
-        'priority': 'ERROR',
-    }
-    # find = {
-    #     # 'method_name': 'win32-volume.cpp',
-    #     'method_name': 'volume-info-manager-win-impl.cpp',
-    # }
-    # find = {
-    #     'method_name': 'async-worker.cpp',
-    #     'json': {
-    #         # 'backup_result': {
-    #         #     # Find all records with backup_results
-    #         # }
-    #     },
-    # }
-
     # timedelta docs: https://docs.python.org/3/library/datetime.html#timedelta-objects
     # Note: "years" is not valid. Use "days=365" to represent one year.
     # Values include:

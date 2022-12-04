@@ -10,6 +10,8 @@ import glob
 import json
 import os.path
 import re
+import sys
+
 import pyparsing
 
 
@@ -92,6 +94,8 @@ class SynologyActiveBackupLogs(object):
         Initialize class parameters.
 
         :param after: datetime.timedelta of how far back to search.
+        :param log_path: string path to the log files
+        :param filename_glob: string filename glob pattern for the log files
         """
         # Filename glob for logs
         self.__log_filename_glob = "log.txt*"
@@ -99,7 +103,14 @@ class SynologyActiveBackupLogs(object):
             self.__log_filename_glob = filename_glob
 
         # Path to log files
-        self.__log_path = "logs"
+        self.__log_path = None
+        if sys.platform == "linux" or sys.platform == "linux2":
+            self.__log_path = "/var/log/activebackupforbusinessagent"
+        elif sys.platform == "darwin":
+            self.__log_path = "/var/log/activebackupforbusinessagent"
+        elif sys.platform == "win32":
+            self.__log_path = 'C:\\ProgramData\\ActiveBackupForBusinessAgent\\log'
+        # Log path was provided
         if log_path:
             self.__log_path = log_path
 
@@ -109,7 +120,7 @@ class SynologyActiveBackupLogs(object):
         # __re_everything is a regular expression to match the rest of the log message
         self.__re_everything = re.compile(r'.*')
 
-        # __now is a timestamp used to determine if the log entry is after "now". 1 minute are added for
+        # __now is a timestamp used to determine if the log entry is after "now". 1 minute is added for
         # processing time.
         self.__now = datetime.datetime.now() + datetime.timedelta(minutes=1)
 
@@ -119,7 +130,6 @@ class SynologyActiveBackupLogs(object):
 
         # __after is a timestamp used to calculate if the log should be included in the search
         # Default: 1 year ago (365 days)
-        # self.since = datetime.timedelta(days=-365)
         if after:
             self.__after = after
 
@@ -295,7 +305,7 @@ class SynologyActiveBackupLogs(object):
         files.sort(key=os.path.getmtime)
         for file in files:
             if datetime.datetime.fromtimestamp(os.path.getmtime(file)) > datetime.datetime.now() - self.__after:
-                print(f"Processing log file: {file}")
+                # print(f"Processing log file: {file}")
                 self.load_log_file(file)
 
         return None

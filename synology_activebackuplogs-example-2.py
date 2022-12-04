@@ -1,4 +1,4 @@
-# This example will return the ERRORs from the last hour
+# This example will return all events with backup_results in the JSON.
 import datetime
 import sys
 # TRMM snippet for production
@@ -12,22 +12,6 @@ def main():
         print("Usage:\n  $ python3 synology_activebackuplogs.py logs/")
         exit(1)
 
-    find = {
-        'priority': 'ERROR',
-    }
-    # find = {
-    #     # 'method_name': 'win32-volume.cpp',
-    #     'method_name': 'volume-info-manager-win-impl.cpp',
-    # }
-    # find = {
-    #     'method_name': 'async-worker.cpp',
-    #     'json': {
-    #         # 'backup_result': {
-    #         #     # Find all records with backup_results
-    #         # }
-    #     },
-    # }
-
     # timedelta docs: https://docs.python.org/3/library/datetime.html#timedelta-objects
     # Note: "years" is not valid. Use "days=365" to represent one year.
     # Values include:
@@ -36,7 +20,7 @@ def main():
     #   hours
     #   minutes
     #   seconds
-    after = datetime.timedelta(hours=1)
+    after = datetime.timedelta(days=1)
 
     logs = synology_activebackuplogs_snippet.SynologyActiveBackupLogs(
         # Search logs within the period specified.
@@ -56,7 +40,12 @@ def main():
 
     # Search for entries that match the criteria.
     find = {
-        'priority': 'ERROR',
+        "method_name": "server-requester.cpp",
+        "json": {
+            "backup_result": {
+                # Find all records with backup_results
+            }
+        },
     }
     found = logs.search(find=find)
     if not found:
@@ -67,8 +56,19 @@ def main():
 
     # Print the log events
     for event in found:
+        # Need to check if the keys are in the event. An error is thrown if a key is accessed that does not exist.
+        if "last_success_time" not in event["json"]["backup_result"] or\
+                "last_backup_status" not in event["json"]["backup_result"]:
+            continue
+
+        # Nicely formatted timestamp
         ts = event["datetime"].strftime("%Y-%m-%d %X")
-        print(f"{event['priority']}: {ts}: {event['method_name']} {event['message']}")
+        ts_backup = datetime.datetime.fromtimestamp(event["json"]["backup_result"]["last_success_time"])
+        delta_backup = datetime.datetime.now() - ts_backup
+        # delta_backup.days is an integer and does not take into account hours.
+        if event["json"]["backup_result"]["last_backup_status"] == "complete" and delta_backup.days < 3:
+            print(f"{ts}: {event['json']['backup_result']} {delta_backup}")
+            return
 
 
 # Main entrance here...
