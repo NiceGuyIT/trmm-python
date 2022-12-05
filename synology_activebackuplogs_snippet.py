@@ -5,14 +5,56 @@
 #
 # PyParsing Documentation: https://pyparsing-docs.readthedocs.io/en/latest/
 # Source: https://github.com/pyparsing/pyparsing/
-import datetime
-import glob
+#
+# Version: 0.1.0
+# Author: David Randall
+# GitHUb: github.com/NiceGuyIT
+# URL: NiceGuyIT.biz
+#
 import json
 import os.path
+import pkg_resources
 import re
+import subprocess
 import sys
 
-import pyparsing
+
+def install(*modules):
+    """
+    Install the required Python modules if they are not installed.
+    See https://stackoverflow.com/a/44210735
+    :param modules: list of required modules
+    :return: None
+    """
+    if not modules:
+        return
+    required = set(modules)
+    installed = {pkg.key for pkg in pkg_resources.working_set}
+    missing = required - installed
+
+    if missing:
+        print(f"Installing modules:", *missing)
+        try:
+            python = sys.executable
+            subprocess.check_call([python, '-m', 'pip', 'install', *missing], stdout=subprocess.DEVNULL)
+        except subprocess.CalledProcessError as err:
+            print(f"Failed to install the required modules: {missing}")
+            print(err)
+            exit(1)
+
+
+try:
+    import datetime
+    import glob
+    import pyparsing
+except ModuleNotFoundError:
+    req = {"datetime", "glob2", "pyparsing"}
+    if sys.platform == "win32":
+        install(*req)
+    else:
+        print(f"Required modules are not installed: {req}")
+        print("Automatic module installation is supported only on Windows")
+        exit(1)
 
 
 def fix_single_quotes(json_str):
@@ -72,9 +114,9 @@ def fix_simple(json_str):
         "snapshot_info": {"data_length": 18739}, "subaction": "update_device_spec"
 
     Given the string
-        "volume_name": "\\?\Volume{25e1747e-5ff0-453f-b39e-a9a2b974addb}\"},
+        "volume_name": "\\?\Volume{12345678-1234-abcd-1234-12345678abcd}\"},
     the backslashes are escaped with a backslash resulting in
-        "volume_name": "\\\\?\\Volume{25e1747e-5ff0-453f-b39e-a9a2b974addb}\\"},
+        "volume_name": "\\\\?\\Volume{12345678-1234-abcd-1234-12345678abcd}\\"},
 
     :param json_str: json_str
     :return cleaned: string
@@ -210,8 +252,6 @@ class SynologyActiveBackupLogs(object):
             re.compile(r'getVolumeDetailInfo for .*Volume'),
             re.compile(r'Snapshot: \{'),
             re.compile(r'Create snapshot for'),
-            # re.compile(r'"volume_name".*Volume\{'),
-            # re.compile(r'Volume\{[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}}'),
         ]
         for regex in re_ignore_list:
             matches = re.search(regex, payload["message"])

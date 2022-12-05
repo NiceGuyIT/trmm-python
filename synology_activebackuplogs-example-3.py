@@ -8,10 +8,6 @@ import synology_activebackuplogs_snippet
 
 
 def main():
-    if len(sys.argv) == 1:
-        print("Usage:\n  $ python3 synology_activebackuplogs.py logs/")
-        exit(1)
-
     # timedelta docs: https://docs.python.org/3/library/datetime.html#timedelta-objects
     # Note: "years" is not valid. Use "days=365" to represent one year.
     # Values include:
@@ -29,7 +25,7 @@ def main():
         after=after,
 
         # Use different log location
-        log_path=sys.argv[1],
+        # log_path="custom/log/path",
 
         # Use different filename globbing
         # filename_glob="log.txt*",

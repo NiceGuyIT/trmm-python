@@ -1,6 +1,7 @@
+#!/usr/bin/env python3
+
 # This example will return the ERRORs from the last hour
 import datetime
-import sys
 # TRMM snippet for production
 # {{synology_activebackuplogs_snippet.py}}
 # Dev
@@ -8,10 +9,6 @@ import synology_activebackuplogs_snippet
 
 
 def main():
-    if len(sys.argv) == 1:
-        print("Usage:\n  $ python3 synology_activebackuplogs.py logs/")
-        exit(1)
-
     # timedelta docs: https://docs.python.org/3/library/datetime.html#timedelta-objects
     # Note: "years" is not valid. Use "days=365" to represent one year.
     # Values include:
@@ -22,14 +19,18 @@ def main():
     #   seconds
     after = datetime.timedelta(hours=1)
 
+    # Production using TRMM snippet
+    # logs = SynologyActiveBackupLogs(
+    # Development
     logs = synology_activebackuplogs_snippet.SynologyActiveBackupLogs(
+
         # Search logs within the period specified.
         # timedelta() will be off by 1 minute because 1 minute is added to detect if the log entry is last year vs.
         # this year. This should be negligible.
         after=after,
 
         # Use different log location
-        log_path=sys.argv[1],
+        # log_path="custom/log/path",
 
         # Use different filename globbing
         # filename_glob="log.txt*",
