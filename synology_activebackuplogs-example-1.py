@@ -50,10 +50,21 @@ def main():
         print(f"No log entries found since {ts}")
         return
 
+    # Check for errors
+    errors_found = False
+
     # Print the log events
     for event in found:
         ts = event["datetime"].strftime("%Y-%m-%d %X")
         print(f"{event['priority']}: {ts}: {event['method_name']} {event['message']}")
+        errors_found = True
+
+    if errors_found:
+        # Errors found. Exit with failure
+        exit(1)
+    else:
+        # No errors found. Exit successful
+        exit(0)
 
 
 # Main entrance here...

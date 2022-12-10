@@ -23,6 +23,7 @@ def install(*modules):
     """
     Install the required Python modules if they are not installed.
     See https://stackoverflow.com/a/44210735
+    Search for modules: https://pypi.org/
     :param modules: list of required modules
     :return: None
     """
