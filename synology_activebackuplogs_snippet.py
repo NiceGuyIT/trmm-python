@@ -3,15 +3,13 @@
 # Future enhancement might be to use the Synology API:
 #   https://github.com/N4S4/synology-api
 #
-# PyParsing Documentation: https://pyparsing-docs.readthedocs.io/en/latest/
-# Source: https://github.com/pyparsing/pyparsing/
-#
 # Version: 0.1.0
 # Author: David Randall
 # GitHUb: github.com/NiceGuyIT
 # URL: NiceGuyIT.biz
 #
 import json
+import logging
 import os.path
 import pkg_resources
 import re
@@ -34,27 +32,26 @@ def install(*modules):
     missing = required - installed
 
     if missing:
-        print(f"Installing modules:", *missing)
+        logging.info(f'Installing modules:', *missing)
         try:
             python = sys.executable
             subprocess.check_call([python, '-m', 'pip', 'install', *missing], stdout=subprocess.DEVNULL)
         except subprocess.CalledProcessError as err:
-            print(f"Failed to install the required modules: {missing}")
-            print(err)
+            logging.error(f'Failed to install the required modules: {missing}')
+            logging.error(err)
             exit(1)
 
 
 try:
     import datetime
     import glob
-    import pyparsing
 except ModuleNotFoundError:
-    req = {"datetime", "glob2", "pyparsing"}
-    if sys.platform == "win32":
+    req = {'datetime', 'glob2'}
+    if sys.platform == 'win32':
         install(*req)
     else:
-        print(f"Required modules are not installed: {req}")
-        print("Automatic module installation is supported only on Windows")
+        logging.error(f'Required modules are not installed: {req}')
+        logging.error('Automatic module installation is supported only on Windows')
         exit(1)
 
 
@@ -81,7 +78,7 @@ def fix_single_quotes(json_str):
     if not left:
         return json_str
 
-    cleaned = ""
+    cleaned = ''
     for index, val in enumerate(left):
         if index == 0:
             # The first value is valid JSON.
@@ -91,10 +88,10 @@ def fix_single_quotes(json_str):
         # The right should split into only 2 pieces
         right = re.split(re_right, val)
         if len(right) != 2:
-            print("Could not fix JSON with single quotes")
-            print(f"JSON string: {json_str}")
-            print(f"left: {left}")
-            print(f"right: {right}")
+            logging.error('Could not fix JSON with single quotes')
+            logging.error(f'JSON string: {json_str}')
+            logging.error(f'left: {left}')
+            logging.error(f'right: {right}')
             return json_str
 
         # The first piece is invalid and needs double quotes replaced with single quotes.
@@ -132,36 +129,43 @@ class SynologyActiveBackupLogs(object):
     SynologyActiveBackupLogs will consume Synology Active Backup logs, parse them and make them available for searching.
     """
 
-    def __init__(self, after=datetime.timedelta(days=365), log_path=None, filename_glob=None):
+    def __init__(self, after=datetime.timedelta(days=365), log_path=None, filename_glob=None,
+                 logger=None):
         """
         Initialize class parameters.
 
         :param after: datetime.timedelta of how far back to search.
         :param log_path: string path to the log files
         :param filename_glob: string filename glob pattern for the log files
+        :param logger: logging instance
         """
+        # Logging framework
+        if logger is None:
+            # If a logger isn't passed, set log level to error.
+            self.__logger = logging.getLogger()
+            self.__logger.setLevel(logging.ERROR)
+        else:
+            self.__logger = logger
+
         # Filename glob for logs
-        self.__log_filename_glob = "log.txt*"
+        self.__log_filename_glob = 'log.txt*'
         if filename_glob:
             self.__log_filename_glob = filename_glob
 
         # Path to log files
         self.__log_path = None
-        if sys.platform == "linux" or sys.platform == "linux2":
-            self.__log_path = "/var/log/activebackupforbusinessagent"
-        elif sys.platform == "darwin":
-            self.__log_path = "/var/log/activebackupforbusinessagent"
-        elif sys.platform == "win32":
+        if sys.platform == 'linux' or sys.platform == 'linux2':
+            self.__log_path = '/var/log/activebackupforbusinessagent'
+        elif sys.platform == 'darwin':
+            self.__log_path = '/var/log/activebackupforbusinessagent'
+        elif sys.platform == 'win32':
             self.__log_path = 'C:\\ProgramData\\ActiveBackupForBusinessAgent\\log'
         # Log path was provided
         if log_path:
             self.__log_path = log_path
 
         # __re_timestamp is a regular expression to extract the timestamp from the beginning of the logs.
-        self.__re_timestamp = re.compile(r'^(?P<month>\w{3}) (?P<day>\d+) (?P<time>[\d:]{8})')
-
-        # __re_everything is a regular expression to match the rest of the log message
-        self.__re_everything = re.compile(r'.*')
+        self.__re_log_entry = re.compile(r'^(?P<month>\w{3}) (?P<day>\d+) (?P<time>[\d:]{8}) \[(?P<priority>\w+)\] (?P<method_name>[\w\.-]+) \((?P<method_num>\d+)\): ?(?P<message>.*)$')
 
         # __now is a timestamp used to determine if the log entry is after "now". 1 minute is added for
         # processing time.
@@ -176,119 +180,27 @@ class SynologyActiveBackupLogs(object):
         if after:
             self.__after = after
 
-        # __lines is an array of the log entries in the log file, one log entry per "line".
-        self.__lines = []
-
-        # __lines_ts is the timestamp for the corresponding line. The numerical offset needs to be kept in sync with
-        # the lines.
-        self.__lines_ts = []
-
         # __events is an array of the log entries that match the search criteria.
         self.__events = []
 
-        # https://pyparsing-docs.readthedocs.io/en/latest/HowToUsePyparsing.html#usage-notes
-        # Alias to improve readability
-        numbers = pyparsing.Word(pyparsing.nums)
-
-        # Timestamp at the beginning of the log entry
-        # Format: Mon DD HH:MM:SS
-        month = pyparsing.Word(pyparsing.string.ascii_uppercase, pyparsing.string.ascii_lowercase, exact=3)
-        day = numbers
-        hour = pyparsing.Combine(numbers + ":" + numbers + ":" + numbers)
-        timestamp = pyparsing.Combine(month + pyparsing.White() +
-                                      day + pyparsing.White() +
-                                      hour).setResultsName("timestamp")
-
-        # Priority of the log entry
-        # Format: [INFO]
-        level = pyparsing.Word(pyparsing.string.ascii_uppercase).setResultsName("priority")
-        priority = pyparsing.Suppress("[") + level + pyparsing.Suppress("]")
-
-        # Method name from the calling program
-        # Format: server-requester.cpp
-        method_name = pyparsing.Word(pyparsing.alphas + pyparsing.nums + "_" + "-" + ".").setResultsName("method_name")
-
-        # Method line number from the calling program
-        # Format: (68):
-        method_num = pyparsing.Suppress("(") + numbers.setResultsName("method_num") + pyparsing.Suppress("):")
-
-        # Message that is logged
-        # The format has no rhyme or reason. Some entries have JSON payloads. Some just have words. Some entries span
-        # multiple lines. The method name and line number can be used to determine the format type, but the line
-        # number may change in each release.
-        message = pyparsing.Regex(self.__re_everything, flags=re.DOTALL).setResultsName("message")
-
-        # Pattern to parse a log entry
-        self.__pattern = timestamp + priority + method_name + method_num + message
-
-    def parse(self, log=None, log_ts=None):
+    def load(self):
         """
-        Parse will parse the log entry into its component parts.
+        Load will load all the log files in the path.
 
-        :param log: string
-        :param log_ts: datetime.datetime
-        :return: None if there was a ParseException. dict of the parsed log.
+        :return: None
         """
-        try:
-            parsed = self.__pattern.parseString(log)
-        except pyparsing.ParseException as err:
-            print("Failed to parse log entry")
-            print(log)
-            print(err.explain(err, depth=5))
+        if not os.path.isdir(self.__log_path):
+            self.__logger.error(f'Error: Log directory does not exist: {self.__log_path}')
             return None
 
-        payload = {
-            "datetime": log_ts,
-            "timestamp": parsed["timestamp"],
-            "priority": parsed["priority"],
-            "method_name": parsed["method_name"],
-            "method_num": parsed["method_num"],
-            "message": parsed["message"],
-            "json_str": None,
-            "json": None,
-        }
+        files = glob.glob(os.path.join(self.__log_path, self.__log_filename_glob))
+        files.sort(key=os.path.getmtime)
+        for file in files:
+            if datetime.datetime.fromtimestamp(os.path.getmtime(file)) > datetime.datetime.now() - self.__after:
+                self.__logger.debug(f'Processing log file: {file}')
+                self.load_log_file(file)
 
-        # Ignore strings that look like JSON but aren't. This is to prevent false JSON parsing errors.
-        re_ignore_list = [
-            re.compile(r'getVolumeDetailInfo for .*Volume'),
-            re.compile(r'Snapshot: \{'),
-            re.compile(r'Create snapshot for'),
-        ]
-        for regex in re_ignore_list:
-            matches = re.search(regex, payload["message"])
-            if matches:
-                # print(f"Ignoring fake JSON: {payload['message']}")
-                # print(f"matches: {matches}")
-                # Fake JSON found. Don't continue the search.
-                return payload
-
-        # If the message has what looks like JSON, extract it from the payload.
-        re_list = [
-            re.compile(r"'(?P<json>{.*})'"),
-            re.compile(r'([^{]*)(?P<json>\{".*})(.*)'),
-        ]
-        for regex in re_list:
-            matches = re.search(regex, payload["message"])
-            if matches:
-                # Fix single quotes
-                # Fix commas without values
-                payload["json_str"] = fix_simple(fix_single_quotes(matches["json"]))
-                try:
-                    payload["json"] = json.loads(payload["json_str"], strict=False)
-                    # print("JSON Object:", payload["json"])
-                    # Valid JSON found. Don't need to look for more.
-                    return payload
-                except json.decoder.JSONDecodeError as err:
-                    print("ERR: Failed to parse JSON from message")
-                    print("Input JSON string:")
-                    print(payload["json_str"])
-                    print("Input log string:")
-                    print(payload["message"])
-                    print(log)
-                    print(err)
-                    print("-----")
-
-        return payload
+        return None
 
     def load_log_file(self, log_path):
         """
@@ -301,55 +213,95 @@ class SynologyActiveBackupLogs(object):
         # https://stackoverflow.com/questions/17912307/u-ufeff-in-python-string/17912811#17912811
         #   Note that EF BB BF is a UTF-8-encoded BOM. It is not required for UTF-8, but serves only as a
         #   signature (usually on Windows).
-        with open(log_path, mode="r", encoding="utf-8-sig") as fh:
+        with open(log_path, mode='r', encoding='utf-8-sig') as fh:
             for line in fh.readlines():
-                ts_match = self.__re_timestamp.match(line)
+                ts_match = self.__re_log_entry.match(line)
                 if ts_match:
+                    # self.__logger.debug(f'Matched: {ts_match.groups()}')
                     # New log entry
                     # Check if the timestamp is before the threshold
                     # FIXME: Use f-strings
-                    ts = datetime.datetime.strptime("{year} {month} {day} {time}".format(
-                        month=ts_match.group("month"),
-                        day=ts_match.group("day"),
-                        time=ts_match.group("time"),
+                    ts = datetime.datetime.strptime('{year} {month} {day} {time}'.format(
+                        month=ts_match.group('month'),
+                        day=ts_match.group('day'),
+                        time=ts_match.group('time'),
                         year=self.__current_year,
-                    ), "%Y %b %d %X")
+                    ), '%Y %b %d %X')
                     if self.__now < ts:
                         # Log timestamp is in the future indicating the log entry is from last year. Subtract one year.
                         # FIXME: This does not take into account leap years. It may be off 1 day on leap years.
                         ts = ts - datetime.timedelta(days=365)
 
                     if self.__now - self.__after < ts:
-                        # Log timestamp is after the "after" timestamp. Include it.
+                        # Log timestamp is after the 'after' timestamp. Include it.
                         # Always include the timestamp
-                        self.__lines.append(line.strip())
-                        self.__lines_ts.append(ts)
+                        self.__events.append({
+                            'datetime': ts,
+                            'timestamp': f'{ts_match["month"]} {ts_match["day"]} {ts_match["time"]}',
+                            'priority': ts_match['priority'],
+                            'method_name': ts_match['method_name'],
+                            'method_num': ts_match['method_num'],
+                            'message': ts_match['message'].strip(),
+                            # 'json_str': None,
+                            'json': None,
+                        })
 
                 else:
                     # Multiline log entry; append to last line
-                    if len(self.__lines) == 0:
-                        # Log timestamp was before the "after" window and nothing is captured yet.
+                    if len(self.__events) == 0:
+                        # Log timestamp was before the 'after' window and nothing is captured yet.
                         continue
-                    self.__lines[len(self.__lines) - 1] += line.strip()
+                    self.__events[len(self.__events) - 1]['message'] += line.strip()
 
-    def load(self):
+    def parse_json(self, index):
         """
-        Load will load all the log files in the path.
+        parse_json will extract the JSON strings from the message and store them in "json".
 
+        :param index: int index of entry to parse
         :return: None
         """
-        if not os.path.isdir(self.__log_path):
-            print(f"Error: Log directory does not exist: {self.__log_path}")
-            return None
+        # Ignore strings that look like JSON but aren't. This is to prevent false JSON parsing errors.
+        re_ignore_list = [
+            re.compile(r'getVolumeDetailInfo for .*Volume'),
+            re.compile(r'Snapshot: \{'),
+            re.compile(r'Create snapshot for'),
+        ]
+        for regex in re_ignore_list:
+            matches = re.search(regex, self.__events[index]['message'])
+            if matches:
+                # Fake JSON found. Don't continue the search.
+                self.__logger.debug(f'Ignoring fake JSON: {self.__events[index]["message"]}')
+                return
 
-        files = glob.glob(os.path.join(self.__log_path, self.__log_filename_glob))
-        files.sort(key=os.path.getmtime)
-        for file in files:
-            if datetime.datetime.fromtimestamp(os.path.getmtime(file)) > datetime.datetime.now() - self.__after:
-                # print(f"Processing log file: {file}")
-                self.load_log_file(file)
+        # If the message has what looks like JSON, extract it from the payload.
+        re_list = [
+            re.compile(r"'(?P<json>{.*})'"),
+            re.compile(r'([^{]*)(?P<json>\{".*})(.*)'),
+        ]
+        for regex in re_list:
+            matches = re.search(regex, self.__events[index]['message'])
+            if matches:
 
-        return None
+                # Fix single quotes
+                # Fix commas without values
+                json_str = fix_simple(fix_single_quotes(matches['json']))
+                try:
+                    # Print the event
+                    # self.__logger.debug(f'JSON: {json_str}')
+
+                    self.__events[index]['json'] = json.loads(json_str, strict=False)
+                    # self.__logger.debug('JSON Object:', self.__events[index]['json'])
+                    # Valid JSON found. Don't need to look for more.
+                    return
+                except json.decoder.JSONDecodeError as err:
+                    self.__logger.error('ERR: Failed to parse JSON from message')
+                    self.__logger.error('Input JSON string:')
+                    self.__logger.error(json_str)
+                    self.__logger.error('Input log string:')
+                    self.__logger.error(self.__events[index]['message'])
+                    self.__logger.error(self.__events[index])
+                    self.__logger.error(err)
+                    self.__logger.error('-----')
 
     def search(self, find):
         """
@@ -361,10 +313,29 @@ class SynologyActiveBackupLogs(object):
         :param find: dict representing the log entries to find.
         :return: dict of the log entries.
         """
-        for x in range(len(self.__lines)):
-            fields = self.parse(log=self.__lines[x], log_ts=self.__lines_ts[x])
-            if fields and self.is_subset(find, fields):
-                self.__events.append(fields)
+        # if self.__logger.getEffectiveLevel() <= logging.DEBUG:
+        #     print("All events:")
+        #     for x in range(len(self.__events)):
+        #         print(self.__events[x])
+        #     print()
+        for x in range(len(self.__events)):
+            self.parse_json(index=x)
+            if not self.is_subset(find, self.__events[x]):
+                # Event doesn't match search. Remove it
+                self.__events[x] = None
+        # self.__events = [x for x in range(len(self.__events)) if not self.is_subset(find, self.__events[x])]
+        # if self.__logger.getEffectiveLevel() <= logging.DEBUG:
+        #     print("Found events:")
+        #     for x in range(len(self.__events)):
+        #         print(self.__events[x])
+        #     print()
+        self.__events = [x for x in self.__events if x is not None]
+        self.__logger.debug("")
+        # if self.__logger.getEffectiveLevel() <= logging.DEBUG:
+        #     print("Returning events:")
+        #     for x in range(len(self.__events)):
+        #         print(self.__events[x])
+        #     print()
         return self.__events
 
     def is_subset(self, subset, superset):
